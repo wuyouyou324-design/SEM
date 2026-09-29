@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, type KeyboardEvent } from "react";
 import { planets, Planet, sunData } from "./data/planets";
 
 function App() {
@@ -20,9 +20,10 @@ function App() {
   useEffect(() => {
     const updateScale = () => {
       const w = window.innerWidth;
-      const h = window.innerHeight - 180; // account for header and controls
+      const h = Math.max(0, window.innerHeight - 180); // account for header and controls
       const minDim = Math.min(w, h);
-      setScale(Math.min(1, minDim / 950));
+      // Keep the scaled scene positive even in an extremely short viewport.
+      setScale(Math.max(0.1, Math.min(1, minDim / 950)));
     };
     updateScale();
     window.addEventListener("resize", updateScale);
@@ -117,6 +118,10 @@ function App() {
               transform: "translate(-50%, -50%)",
             }}
             onClick={handleSunClick}
+            onKeyDown={(event) => handleKeyboardActivation(event, handleSunClick)}
+            role="button"
+            tabIndex={0}
+            aria-label="查看太陽資訊"
           >
             {/* Sun hit area */}
             <div className="absolute -inset-4 rounded-full" />
@@ -149,7 +154,7 @@ function App() {
             return (
               <div
                 key={planet.id}
-                className="absolute cursor-pointer"
+                className="absolute cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-4 rounded-full"
                 style={{
                   top: `${y}px`,
                   left: `${x}px`,
@@ -157,8 +162,12 @@ function App() {
                   zIndex: isHovered || isSelected ? 20 : 5,
                 }}
                 onClick={() => handlePlanetClick(planet)}
+                onKeyDown={(event) => handleKeyboardActivation(event, () => handlePlanetClick(planet))}
                 onMouseEnter={() => setHoveredPlanet(planet.id)}
                 onMouseLeave={() => setHoveredPlanet(null)}
+                role="button"
+                tabIndex={0}
+                aria-label={`查看${planet.name}資訊`}
               >
                 {/* Invisible hit area */}
                 <div
@@ -229,6 +238,8 @@ function App() {
           <div className="flex items-center gap-3 md:gap-5 flex-wrap justify-center">
             <button
               onClick={() => setIsPlaying(!isPlaying)}
+              aria-label={isPlaying ? "暫停行星運行" : "播放行星運行"}
+              aria-pressed={isPlaying}
               className="w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 flex items-center justify-center text-white transition-all hover:scale-110 active:scale-95"
               title={isPlaying ? "暫停" : "播放"}
             >
@@ -251,6 +262,7 @@ function App() {
                   <button
                     key={s}
                     onClick={() => setSpeed(s)}
+                    aria-pressed={speed === s}
                     className={`px-2 py-1 rounded text-xs font-medium transition-all ${
                       speed === s
                         ? "bg-blue-500/80 text-white shadow-lg shadow-blue-500/30"
@@ -270,6 +282,7 @@ function App() {
               <button
                 key={planet.id}
                 onClick={() => handlePlanetClick(planet)}
+                aria-label={`查看${planet.name}資訊`}
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs transition-all ${
                   selectedPlanet?.id === planet.id
                     ? "bg-white/20 text-white border border-white/30 shadow-lg"
@@ -326,6 +339,7 @@ function App() {
               </div>
               <button
                 onClick={() => setShowInfo(false)}
+                aria-label="關閉資訊面板"
                 className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white/60 hover:text-white transition-all text-sm"
               >
                 ✕
@@ -412,6 +426,16 @@ function InfoRow({ label, value, icon }: { label: string; value: string; icon: s
       <span className="text-sm text-white font-medium">{value}</span>
     </div>
   );
+}
+
+function handleKeyboardActivation(
+  event: KeyboardEvent<HTMLElement>,
+  onActivate: () => void
+) {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    onActivate();
+  }
 }
 
 function formatOrbitalPeriod(days: number): string {
