@@ -3,8 +3,13 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig(({ mode }) => ({
-  // GitHub Pages serves this repository under /SEM/; keep local dev at root.
-  base: mode === "production" ? "/SEM/" : "/",
+  // Legacy Pages serves the committed dist folder; Actions serves dist at /SEM/.
+  base: process.env.VITE_BASE || (mode === "production" ? "/SEM/" : "/"),
+  build: {
+    rollupOptions: {
+      input: "app.html",
+    },
+  },
   plugins: [react(), tailwindcss()],
   server: {
     host: "0.0.0.0",
