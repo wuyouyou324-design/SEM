@@ -1,62 +1,124 @@
-import { useState, useEffect, useRef, useCallback, type KeyboardEvent } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { planets, Planet, sunData } from "./data/planets";
 
 function App() {
   const [selectedPlanet, setSelectedPlanet] = useState<Planet | null>(null);
   const [isPlaying, setIsPlaying] = useState(true);
   const [speed, setSpeed] = useState(1);
-  const [angles, setAngles] = useState<number[]>(
-    planets.map((_, i) => (i * Math.PI * 2) / planets.length)
-  );
   const [showInfo, setShowInfo] = useState(false);
   const [hoveredPlanet, setHoveredPlanet] = useState<string | null>(null);
   const [scale, setScale] = useState(1);
+
   const containerRef = useRef<HTMLDivElement>(null);
+  const planetRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const animationRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(0);
-  const anglesRef = useRef<number[]>(angles);
+  const isPlayingRef = useRef<boolean>(isPlaying);
+  const speedRef = useRef<number>(speed);
+  const anglesRef = useRef<number[]>(
+    planets.map((_, i) => (i * Math.PI * 2) / planets.length)
+  );
 
-  // Responsive scaling
+  const closeBtnRef = useRef<HTMLButtonElement>(null);
+  const lastFocusedElementRef = useRef<HTMLElement | null>(null);
+
+  // Sync refs with state to avoid re-binding animation callbacks
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
+
+  useEffect(() => {
+    speedRef.current = speed;
+  }, [speed]);
+
+  // Update planet DOM positions without triggering React re-renders
+  const updatePlanetPositions = useCallback(() => {
+    for (let i = 0; i < planets.length; i++) {
+      const el = planetRefs.current[i];
+      if (el) {
+        const angle = anglesRef.current[i];
+        const x = 450 + Math.cos(angle) * planets[i].orbitRadius;
+        const y = 450 + Math.sin(angle) * planets[i].orbitRadius;
+        el.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
+      }
+    }
+  }, []);
+
+  // Responsive scaling calculation
   useEffect(() => {
     const updateScale = () => {
       const w = window.innerWidth;
-      const h = Math.max(0, window.innerHeight - 180); // account for header and controls
-      const minDim = Math.min(w, h);
-      // Keep the scaled scene positive even in an extremely short viewport.
-      setScale(Math.max(0.1, Math.min(1, minDim / 950)));
+      const h = window.innerHeight;
+      // Subtract space for header and bottom controls
+      const headerHeight = w < 640 ? 60 : 70;
+      const controlsHeight = w < 640 ? 110 : 130;
+      const availableHeight = Math.max(100, h - headerHeight - controlsHeight);
+      const availableWidth = Math.max(100, w - 24);
+      const minDim = Math.min(availableWidth, availableHeight);
+
+      // Calculate scale based on 900px canvas size
+      const targetScale = Math.max(0.1, Math.min(1, minDim / 920));
+      setScale(targetScale);
     };
+
     updateScale();
     window.addEventListener("resize", updateScale);
     return () => window.removeEventListener("resize", updateScale);
   }, []);
 
-  const animate = useCallback(
-    (timestamp: number) => {
+  // High-performance animation loop: uses direct DOM updates for 60fps smoothness
+  useEffect(() => {
+    // Initial placement
+    updatePlanetPositions();
+
+    const animate = (timestamp: number) => {
       if (!lastTimeRef.current) lastTimeRef.current = timestamp;
       const delta = (timestamp - lastTimeRef.current) / 1000;
       lastTimeRef.current = timestamp;
 
-      if (isPlaying) {
-        const newAngles = anglesRef.current.map((angle, i) => {
-          return angle + planets[i].speed * speed * delta * 0.5;
-        });
-        anglesRef.current = newAngles;
-        setAngles([...newAngles]);
+      if (isPlayingRef.current) {
+        for (let i = 0; i < planets.length; i++) {
+          anglesRef.current[i] +=
+            planets[i].speed * speedRef.current * delta * 0.5;
+        }
+        updatePlanetPositions();
       }
 
       animationRef.current = requestAnimationFrame(animate);
-    },
-    [isPlaying, speed]
-  );
+    };
 
-  useEffect(() => {
     animationRef.current = requestAnimationFrame(animate);
+
     return () => {
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [animate]);
+  }, [updatePlanetPositions]);
+
+  // Accessibility: manage focus and keyboard events for the modal dialog
+  useEffect(() => {
+    if (showInfo) {
+      lastFocusedElementRef.current = document.activeElement as HTMLElement | null;
+      // Focus close button when dialog opens
+      setTimeout(() => {
+        closeBtnRef.current?.focus();
+      }, 50);
+
+      const handleKeyDown = (e: globalThis.KeyboardEvent) => {
+        if (e.key === "Escape") {
+          setShowInfo(false);
+        }
+      };
+      window.addEventListener("keydown", handleKeyDown);
+      return () => window.removeEventListener("keydown", handleKeyDown);
+    } else {
+      // Restore focus when dialog closes
+      if (lastFocusedElementRef.current && typeof lastFocusedElementRef.current.focus === "function") {
+        lastFocusedElementRef.current.focus();
+      }
+    }
+  }, [showInfo]);
 
   const handlePlanetClick = (planet: Planet) => {
     setSelectedPlanet(planet);
@@ -68,38 +130,46 @@ function App() {
     setShowInfo(true);
   };
 
+  const closeDialog = () => {
+    setShowInfo(false);
+  };
+
   const speedOptions = [0.25, 0.5, 1, 2, 5, 10];
 
   return (
-    <div className="w-full h-screen bg-[#0a0a1a] overflow-hidden relative flex flex-col">
+    <div className="w-full h-screen bg-[#0a0a1a] overflow-hidden relative flex flex-col select-none">
       {/* Stars background */}
       <Stars />
 
       {/* Header */}
-      <header className="relative z-10 text-center py-3 bg-gradient-to-b from-black/60 to-transparent">
-        <h1 className="text-xl md:text-3xl font-bold text-white tracking-wider">
-          🌌 互動式太陽系學習演示
+      <header className="relative z-10 text-center py-2 sm:py-3 px-2 bg-gradient-to-b from-black/70 to-transparent flex-shrink-0">
+        <h1 className="text-lg sm:text-2xl md:text-3xl font-bold text-white tracking-wider flex items-center justify-center gap-2">
+          <span>🌌</span>
+          <span>互動式太陽系學習演示</span>
         </h1>
-        <p className="text-gray-400 text-xs md:text-sm mt-1">點擊行星或太陽查看詳細資訊</p>
+        <p className="text-gray-400 text-[11px] sm:text-xs md:text-sm mt-0.5">
+          點擊行星或太陽查看詳細資訊
+        </p>
       </header>
 
-      {/* Solar System Container */}
-      <div className="flex-1 relative flex items-center justify-center overflow-hidden">
+      {/* Solar System Orbit Canvas Area */}
+      <main className="flex-1 relative flex items-center justify-center overflow-hidden">
         <div
           ref={containerRef}
-          className="relative transition-transform duration-300"
+          className="relative transition-transform duration-200 ease-out"
           style={{
             width: "900px",
             height: "900px",
             transform: `scale(${scale})`,
             transformOrigin: "center center",
           }}
+          aria-label="太陽系運行圖"
         >
           {/* Orbit paths */}
           {planets.map((planet) => (
             <div
               key={`orbit-${planet.id}`}
-              className="absolute rounded-full border border-white/[0.08]"
+              className="absolute rounded-full border border-white/[0.08] pointer-events-none"
               style={{
                 width: `${planet.orbitRadius * 2}px`,
                 height: `${planet.orbitRadius * 2}px`,
@@ -110,86 +180,80 @@ function App() {
           ))}
 
           {/* Sun */}
-          <div
-            className="absolute cursor-pointer z-10 group"
+          <button
+            type="button"
+            className="absolute z-10 group cursor-pointer p-0 border-0 bg-transparent rounded-full focus:outline-none focus-visible:ring-4 focus-visible:ring-yellow-400/80"
             style={{
               top: "450px",
               left: "450px",
               transform: "translate(-50%, -50%)",
             }}
             onClick={handleSunClick}
-            onKeyDown={(event) => handleKeyboardActivation(event, handleSunClick)}
-            role="button"
-            tabIndex={0}
-            aria-label="查看太陽資訊"
+            aria-label="查看太陽詳細資訊"
           >
             {/* Sun hit area */}
             <div className="absolute -inset-4 rounded-full" />
             {/* Sun visual */}
             <div
-              className="rounded-full"
+              className="rounded-full transition-transform duration-200 group-hover:scale-110"
               style={{
                 width: "56px",
                 height: "56px",
-                background: "radial-gradient(circle at 35% 35%, #fffde0, #ffcc00, #ff8c00, #cc5500)",
+                background:
+                  "radial-gradient(circle at 35% 35%, #fffde0, #ffcc00, #ff8c00, #cc5500)",
                 boxShadow:
                   "0 0 30px #ffcc00, 0 0 60px #ff8c00, 0 0 100px rgba(255, 140, 0, 0.4), 0 0 150px rgba(255, 140, 0, 0.2)",
                 animation: "sunGlow 3s ease-in-out infinite",
               }}
             />
             {/* Sun label on hover */}
-            <div className="absolute -bottom-7 left-1/2 -translate-x-1/2 text-xs text-yellow-300 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+            <div className="absolute -bottom-7 left-1/2 -translate-x-1/2 text-xs text-yellow-300 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap bg-black/80 px-2 py-0.5 rounded border border-yellow-500/20 pointer-events-none">
               太陽
             </div>
-          </div>
+          </button>
 
           {/* Planets */}
           {planets.map((planet, index) => {
-            const x = 450 + Math.cos(angles[index]) * planet.orbitRadius;
-            const y = 450 + Math.sin(angles[index]) * planet.orbitRadius;
             const isHovered = hoveredPlanet === planet.id;
             const isSelected = selectedPlanet?.id === planet.id;
-            const hitSize = Math.max(planet.size * 2, 28);
+            const hitSize = Math.max(planet.size * 2, 32);
 
             return (
-              <div
+              <button
                 key={planet.id}
-                className="absolute cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-4 rounded-full"
+                ref={(el) => {
+                  planetRefs.current[index] = el;
+                }}
+                type="button"
+                className="absolute top-0 left-0 cursor-pointer p-0 border-0 bg-transparent rounded-full focus:outline-none focus-visible:ring-4 focus-visible:ring-white/80"
                 style={{
-                  top: `${y}px`,
-                  left: `${x}px`,
-                  transform: "translate(-50%, -50%)",
-                  zIndex: isHovered || isSelected ? 20 : 5,
+                  zIndex: isHovered || isSelected ? 25 : 5,
+                  transform: "translate(450px, 450px) translate(-50%, -50%)",
                 }}
                 onClick={() => handlePlanetClick(planet)}
-                onKeyDown={(event) => handleKeyboardActivation(event, () => handlePlanetClick(planet))}
                 onMouseEnter={() => setHoveredPlanet(planet.id)}
                 onMouseLeave={() => setHoveredPlanet(null)}
-                role="button"
-                tabIndex={0}
-                aria-label={`查看${planet.name}資訊`}
+                aria-label={`查看${planet.name}詳細資訊`}
               >
-                {/* Invisible hit area */}
+                {/* Hit area */}
                 <div
-                  className="absolute rounded-full"
+                  className="absolute rounded-full -translate-x-1/2 -translate-y-1/2 top-1/2 left-1/2"
                   style={{
                     width: `${hitSize}px`,
                     height: `${hitSize}px`,
-                    top: "50%",
-                    left: "50%",
-                    transform: "translate(-50%, -50%)",
                   }}
                 />
                 {/* Planet body */}
                 <div
                   className="rounded-full transition-all duration-200"
                   style={{
-                    width: `${planet.size * (isHovered ? 1.5 : 1)}px`,
-                    height: `${planet.size * (isHovered ? 1.5 : 1)}px`,
+                    width: `${planet.size * (isHovered ? 1.4 : 1)}px`,
+                    height: `${planet.size * (isHovered ? 1.4 : 1)}px`,
                     background: `radial-gradient(circle at 30% 30%, ${lightenColor(planet.color, 30)}, ${planet.color}, ${adjustColor(planet.color, -50)})`,
-                    boxShadow: isHovered || isSelected
-                      ? `0 0 15px ${planet.glowColor}, 0 0 30px ${planet.glowColor}, 0 0 45px ${planet.glowColor}`
-                      : `0 0 8px ${planet.glowColor}`,
+                    boxShadow:
+                      isHovered || isSelected
+                        ? `0 0 15px ${planet.glowColor}, 0 0 30px ${planet.glowColor}, 0 0 45px ${planet.glowColor}`
+                        : `0 0 8px ${planet.glowColor}`,
                   }}
                 />
                 {/* Saturn's ring */}
@@ -221,52 +285,55 @@ function App() {
                 )}
                 {/* Planet label */}
                 {(isHovered || isSelected) && (
-                  <div className="absolute -bottom-7 left-1/2 -translate-x-1/2 whitespace-nowrap text-xs text-white bg-black/80 px-2 py-0.5 rounded border border-white/10">
+                  <div className="absolute -bottom-7 left-1/2 -translate-x-1/2 whitespace-nowrap text-xs text-white bg-black/80 px-2 py-0.5 rounded border border-white/15 pointer-events-none shadow-md">
                     {planet.name}
                   </div>
                 )}
-              </div>
+              </button>
             );
           })}
         </div>
-      </div>
+      </main>
 
-      {/* Controls */}
-      <div className="relative z-10 bg-gradient-to-t from-black/90 via-black/60 to-transparent pt-6 pb-4 px-4">
-        <div className="max-w-2xl mx-auto flex flex-col items-center gap-3">
-          {/* Play/Pause and Speed */}
-          <div className="flex items-center gap-3 md:gap-5 flex-wrap justify-center">
+      {/* Controls Container */}
+      <footer className="relative z-20 bg-gradient-to-t from-black/95 via-black/80 to-transparent pt-3 pb-3 sm:pb-4 px-3 flex-shrink-0">
+        <div className="max-w-3xl mx-auto flex flex-col items-center gap-2.5 sm:gap-3">
+          {/* Play/Pause & Speed Buttons */}
+          <div className="flex items-center gap-3 sm:gap-5 flex-wrap justify-center">
             <button
+              type="button"
               onClick={() => setIsPlaying(!isPlaying)}
               aria-label={isPlaying ? "暫停行星運行" : "播放行星運行"}
               aria-pressed={isPlaying}
-              className="w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 flex items-center justify-center text-white transition-all hover:scale-110 active:scale-95"
+              className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 border border-white/20 flex items-center justify-center text-white transition-all shadow-md hover:shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
               title={isPlaying ? "暫停" : "播放"}
             >
               {isPlaying ? (
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                   <rect x="6" y="4" width="4" height="16" rx="1" />
                   <rect x="14" y="4" width="4" height="16" rx="1" />
                 </svg>
               ) : (
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                   <polygon points="6,4 20,12 6,20" />
                 </svg>
               )}
             </button>
 
-            <div className="flex items-center gap-2">
-              <span className="text-white/50 text-xs md:text-sm">速度:</span>
-              <div className="flex gap-1">
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <span className="text-white/60 text-xs sm:text-sm font-medium">速度:</span>
+              <div className="flex gap-1 bg-white/5 p-1 rounded-lg border border-white/10">
                 {speedOptions.map((s) => (
                   <button
                     key={s}
+                    type="button"
                     onClick={() => setSpeed(s)}
                     aria-pressed={speed === s}
-                    className={`px-2 py-1 rounded text-xs font-medium transition-all ${
+                    aria-label={`切換為 ${s} 倍速`}
+                    className={`px-2 py-1 rounded text-xs font-semibold transition-all ${
                       speed === s
-                        ? "bg-blue-500/80 text-white shadow-lg shadow-blue-500/30"
-                        : "bg-white/10 text-white/50 hover:bg-white/20 hover:text-white"
+                        ? "bg-blue-600 text-white shadow-md shadow-blue-500/30"
+                        : "text-white/60 hover:text-white hover:bg-white/10"
                     }`}
                   >
                     {s}x
@@ -276,108 +343,133 @@ function App() {
             </div>
           </div>
 
-          {/* Planet quick nav */}
-          <div className="flex flex-wrap justify-center gap-1.5 mt-1">
+          {/* Planet quick nav horizontal scroll container on mobile */}
+          <nav
+            aria-label="行星快速選擇導航"
+            className="w-full flex justify-start sm:justify-center overflow-x-auto no-scrollbar py-0.5 px-1 gap-1.5"
+          >
             {planets.map((planet) => (
               <button
                 key={planet.id}
+                type="button"
                 onClick={() => handlePlanetClick(planet)}
-                aria-label={`查看${planet.name}資訊`}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs transition-all ${
-                  selectedPlanet?.id === planet.id
-                    ? "bg-white/20 text-white border border-white/30 shadow-lg"
-                    : "bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/80 border border-transparent"
+                aria-label={`查看${planet.name}詳細資訊`}
+                aria-pressed={selectedPlanet?.id === planet.id && showInfo}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-all flex-shrink-0 ${
+                  selectedPlanet?.id === planet.id && showInfo
+                    ? "bg-white/25 text-white border border-white/40 shadow-md"
+                    : "bg-white/5 text-white/60 hover:bg-white/15 hover:text-white border border-transparent"
                 }`}
               >
                 <div
                   className="w-2.5 h-2.5 rounded-full flex-shrink-0"
                   style={{ backgroundColor: planet.color }}
                 />
-                <span className="hidden sm:inline">{planet.name}</span>
+                <span>{planet.name}</span>
               </button>
             ))}
-          </div>
+          </nav>
         </div>
-      </div>
+      </footer>
 
-      {/* Info Panel */}
+      {/* Info Panel / Modal Dialog */}
       {showInfo && (
-        <div className="absolute top-16 right-2 md:right-4 z-30 w-72 md:w-80 animate-slideIn">
-          <div className="bg-gray-900/95 backdrop-blur-xl rounded-2xl border border-white/10 shadow-2xl overflow-hidden">
-            {/* Panel header */}
-            <div className="p-4 border-b border-white/10 flex items-center justify-between">
-              <div className="flex items-center gap-3">
+        <>
+          {/* Mobile backdrop for easy tap to close */}
+          <div
+            className="fixed inset-0 bg-black/40 backdrop-blur-sm z-30 md:hidden animate-fadeIn"
+            onClick={closeDialog}
+            aria-hidden="true"
+          />
+
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="dialog-title"
+            className="fixed md:absolute bottom-0 md:bottom-auto md:top-16 inset-x-0 md:inset-x-auto md:right-4 z-40 w-full md:w-80 max-h-[80vh] md:max-h-[calc(100vh-140px)] flex flex-col animate-slideUp md:animate-slideIn"
+          >
+            <div className="bg-gray-900/95 backdrop-blur-xl rounded-t-2xl md:rounded-2xl border border-white/15 shadow-2xl overflow-hidden flex flex-col max-h-full">
+              {/* Header */}
+              <div className="p-3.5 sm:p-4 border-b border-white/10 flex items-center justify-between flex-shrink-0">
+                <div className="flex items-center gap-3">
+                  {selectedPlanet ? (
+                    <>
+                      <div
+                        className="w-9 h-9 sm:w-10 sm:h-10 rounded-full flex-shrink-0"
+                        style={{
+                          background: `radial-gradient(circle at 30% 30%, ${lightenColor(selectedPlanet.color, 30)}, ${selectedPlanet.color}, ${adjustColor(selectedPlanet.color, -50)})`,
+                          boxShadow: `0 0 15px ${selectedPlanet.glowColor}`,
+                        }}
+                      />
+                      <div>
+                        <h2 id="dialog-title" className="text-base sm:text-lg font-bold text-white leading-tight">
+                          {selectedPlanet.name}
+                        </h2>
+                        <p className="text-xs text-gray-400">{selectedPlanet.nameEn}</p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div
+                        className="w-9 h-9 sm:w-10 sm:h-10 rounded-full flex-shrink-0"
+                        style={{
+                          background: "radial-gradient(circle at 30% 30%, #fffde0, #ffcc00, #ff8c00)",
+                          boxShadow: "0 0 15px rgba(255, 204, 0, 0.5)",
+                        }}
+                      />
+                      <div>
+                        <h2 id="dialog-title" className="text-base sm:text-lg font-bold text-white leading-tight">
+                          {sunData.name}
+                        </h2>
+                        <p className="text-xs text-gray-400">{sunData.nameEn}</p>
+                      </div>
+                    </>
+                  )}
+                </div>
+                <button
+                  ref={closeBtnRef}
+                  type="button"
+                  onClick={closeDialog}
+                  aria-label="關閉詳細資訊面板"
+                  className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 flex items-center justify-center text-white/70 hover:text-white transition-all text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="p-3.5 sm:p-4 space-y-2.5 overflow-y-auto max-h-[60vh] md:max-h-none">
                 {selectedPlanet ? (
                   <>
-                    <div
-                      className="w-10 h-10 rounded-full flex-shrink-0"
-                      style={{
-                        background: `radial-gradient(circle at 30% 30%, ${lightenColor(selectedPlanet.color, 30)}, ${selectedPlanet.color}, ${adjustColor(selectedPlanet.color, -50)})`,
-                        boxShadow: `0 0 15px ${selectedPlanet.glowColor}`,
-                      }}
-                    />
-                    <div>
-                      <h2 className="text-lg font-bold text-white">{selectedPlanet.name}</h2>
-                      <p className="text-xs text-gray-400">{selectedPlanet.nameEn}</p>
+                    <InfoRow label="直徑" value={`${selectedPlanet.realDiameter.toLocaleString()} km`} icon="📏" />
+                    <InfoRow label="與太陽距離" value={`${selectedPlanet.distanceFromSun.toLocaleString()} 百萬公里`} icon="📐" />
+                    <InfoRow label="公轉週期" value={formatOrbitalPeriod(selectedPlanet.orbitalPeriod)} icon="🔄" />
+                    <InfoRow label="自轉週期" value={formatRotation(selectedPlanet.rotationPeriod)} icon="🌀" />
+                    <InfoRow label="衛星數量" value={`${selectedPlanet.moons} 顆`} icon="🌙" />
+                    <div className="pt-2.5 border-t border-white/10">
+                      <p className="text-xs sm:text-sm text-gray-300 leading-relaxed">
+                        {selectedPlanet.description}
+                      </p>
                     </div>
                   </>
                 ) : (
                   <>
-                    <div
-                      className="w-10 h-10 rounded-full flex-shrink-0"
-                      style={{
-                        background: "radial-gradient(circle at 30% 30%, #fffde0, #ffcc00, #ff8c00)",
-                        boxShadow: "0 0 15px rgba(255, 204, 0, 0.5)",
-                      }}
-                    />
-                    <div>
-                      <h2 className="text-lg font-bold text-white">{sunData.name}</h2>
-                      <p className="text-xs text-gray-400">{sunData.nameEn}</p>
+                    <InfoRow label="直徑" value={`${sunData.realDiameter.toLocaleString()} km`} icon="📏" />
+                    <InfoRow label="表面溫度" value="約 5,500°C" icon="🌡️" />
+                    <InfoRow label="核心溫度" value="約 1,500萬°C" icon="🔥" />
+                    <InfoRow label="類型" value="G型主序星" icon="⭐" />
+                    <InfoRow label="年齡" value="約 46 億年" icon="⏳" />
+                    <div className="pt-2.5 border-t border-white/10">
+                      <p className="text-xs sm:text-sm text-gray-300 leading-relaxed">
+                        {sunData.description}
+                      </p>
                     </div>
                   </>
                 )}
               </div>
-              <button
-                onClick={() => setShowInfo(false)}
-                aria-label="關閉資訊面板"
-                className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white/60 hover:text-white transition-all text-sm"
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Panel content */}
-            <div className="p-4 space-y-2.5">
-              {selectedPlanet ? (
-                <>
-                  <InfoRow label="直徑" value={`${selectedPlanet.realDiameter.toLocaleString()} km`} icon="📏" />
-                  <InfoRow label="與太陽距離" value={`${selectedPlanet.distanceFromSun.toLocaleString()} 百萬公里`} icon="📐" />
-                  <InfoRow label="公轉週期" value={formatOrbitalPeriod(selectedPlanet.orbitalPeriod)} icon="🔄" />
-                  <InfoRow label="自轉週期" value={formatRotation(selectedPlanet.rotationPeriod)} icon="🌀" />
-                  <InfoRow label="衛星數量" value={`${selectedPlanet.moons} 顆`} icon="🌙" />
-                  <div className="pt-3 border-t border-white/10">
-                    <p className="text-sm text-gray-300 leading-relaxed">
-                      {selectedPlanet.description}
-                    </p>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <InfoRow label="直徑" value={`${sunData.realDiameter.toLocaleString()} km`} icon="📏" />
-                  <InfoRow label="表面溫度" value="約 5,500°C" icon="🌡️" />
-                  <InfoRow label="核心溫度" value="約 1,500萬°C" icon="🔥" />
-                  <InfoRow label="類型" value="G型主序星" icon="⭐" />
-                  <InfoRow label="年齡" value="約 46 億年" icon="⏳" />
-                  <div className="pt-3 border-t border-white/10">
-                    <p className="text-sm text-gray-300 leading-relaxed">
-                      {sunData.description}
-                    </p>
-                  </div>
-                </>
-              )}
             </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );
@@ -396,7 +488,7 @@ function Stars() {
   );
 
   return (
-    <div className="absolute inset-0 overflow-hidden pointer-events-none">
+    <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden="true">
       {stars.current.map((star, i) => (
         <div
           key={i}
@@ -418,24 +510,14 @@ function Stars() {
 
 function InfoRow({ label, value, icon }: { label: string; value: string; icon: string }) {
   return (
-    <div className="flex justify-between items-center py-1">
-      <span className="text-sm text-gray-400 flex items-center gap-1.5">
+    <div className="flex justify-between items-center py-0.5">
+      <span className="text-xs sm:text-sm text-gray-400 flex items-center gap-1.5">
         <span className="text-xs">{icon}</span>
         {label}
       </span>
-      <span className="text-sm text-white font-medium">{value}</span>
+      <span className="text-xs sm:text-sm text-white font-medium">{value}</span>
     </div>
   );
-}
-
-function handleKeyboardActivation(
-  event: KeyboardEvent<HTMLElement>,
-  onActivate: () => void
-) {
-  if (event.key === "Enter" || event.key === " ") {
-    event.preventDefault();
-    onActivate();
-  }
 }
 
 function formatOrbitalPeriod(days: number): string {
